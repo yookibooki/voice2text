@@ -15,11 +15,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-var version = "0.2.0"
-
 const pidFile = "/tmp/voice2text.pid"
 const wavFile = "/tmp/voice2text.wav"
-const logFile = "/tmp/voice2text.log"
 
 var recordCmd *exec.Cmd
 
@@ -35,12 +32,6 @@ func getAPIKey() string {
 	return strings.TrimSpace(string(b))
 }
 
-func log(msg string) {
-	f, _ := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	fmt.Fprintf(f, "%s %s\n", time.Now().Format("15:04:05"), msg)
-	f.Close()
-}
-
 func isRecording() (bool, int) {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -51,7 +42,6 @@ func isRecording() (bool, int) {
 }
 
 func startRecording() {
-	log("start recording")
 	cmd := exec.Command("arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", wavFile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Start()
@@ -76,7 +66,7 @@ func transcribe(client openai.Client, model openai.AudioModel) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return resp.Text, nil
+	return strings.TrimSpace(resp.Text), nil
 }
 
 func stopRecording(pid int) {
@@ -86,11 +76,8 @@ func stopRecording(pid int) {
 		recordCmd = nil
 	}
 	os.Remove(pidFile)
-	log("stop recording, transcribing")
-
 	apiKey := getAPIKey()
 	if apiKey == "" {
-		log("GROQ_API_KEY missing")
 		return
 	}
 
@@ -101,40 +88,30 @@ func stopRecording(pid int) {
 
 	models := []openai.AudioModel{"whisper-large-v3", "whisper-large-v3-turbo"}
 	var text string
-	for i, m := range models {
+	for _, m := range models {
 		t, err := transcribe(client, m)
-		if err == nil {
-			text = t
-			break
-		}
-		log(fmt.Sprintf("model %s failed: %s", m, err.Error()))
-		if strings.Contains(strings.ToLower(err.Error()), "rate limit") || strings.Contains(strings.ToLower(err.Error()), "429") {
-			log(fmt.Sprintf("rate limited on %s, trying next model", m))
+		if err != nil {
 			continue
 		}
-		if i < len(models)-1 {
-			log(fmt.Sprintf("non-rate-limit error on %s, trying next model", m))
-			continue
-		}
+		text = t
+		break
 	}
 	if text == "" {
-		log("all models failed")
 		return
 	}
 
-	log("result: " + text)
-	typeText(text)
+	if err := typeText(text); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to type text: %v\n", err)
+	}
 }
 
-func typeText(text string) {
+func typeText(text string) error {
 	if text == "" {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "xdotool", "type", "--delay", "0", text).Run(); err != nil {
-		log("type error: " + err.Error())
-	}
+	return exec.CommandContext(ctx, "xdotool", "type", "--delay", "0", text).Run()
 }
 
 func main() {
