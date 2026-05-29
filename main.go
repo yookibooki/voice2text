@@ -87,21 +87,6 @@ func typeText(text string) error {
 	if text == "" {
 		return nil
 	}
-
-	// xdotool type simulates individual key events — for long text this is
-	// glacial.  Clipboard + Ctrl+V is effectively instant.
-	if len(text) > 20 {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		cmd := exec.CommandContext(ctx, "xclip", "-selection", "clipboard")
-		cmd.Stdin = strings.NewReader(text)
-		if err := cmd.Run(); err == nil {
-			return exec.CommandContext(ctx, "xdotool", "key", "ctrl+v").Run()
-		}
-		// If xclip is missing, fall through to xdotool type
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, "xdotool", "type", "--delay", "0", text).Run()
