@@ -9,44 +9,61 @@
 #include <alsa/asoundlib.h>
 #include <curl/curl.h>
 
-#define LOCK_FILE "/dev/shm/v2t.lock"
-#define AUDIO_FILE "/dev/shm/v2t.wav"
-#define GROQ_URL "https://api.groq.com/openai/v1/audio/transcriptions"
-#define MODEL_NAME "whisper-large-v3-turbo"
+#define LOCK_FILE       "/dev/shm/v2t.lock"
+#define AUDIO_FILE      "/dev/shm/v2t.wav"
+#define GROQ_URL        "https://api.groq.com/openai/v1/audio/transcriptions"
+#define MODEL_NAME      "whisper-large-v3-turbo"
+#define SAMPLE_RATE     16000
+#define BUFFER_FRAMES   512
+#define BYTES_PER_FRAME 2   /* S16_LE mono */
 
 #pragma pack(push, 1)
 typedef struct {
-    char riff[4]; int32_t overall_size; char wave[4]; char fmt_chunk_marker[4];
-    int32_t length_of_fmt; int16_t format_type; int16_t channels;
-    int32_t sample_rate; int32_t byterate; int16_t block_align;
-    int16_t bits_per_sample; char data_chunk_header[4]; int32_t data_size;
+    char    riff[4];
+    int32_t file_size;
+    char    wave[4];
+    char    fmt_id[4];
+    int32_t fmt_size;
+    int16_t format;         /* 1 = PCM */
+    int16_t channels;
+    int32_t sample_rate;
+    int32_t byte_rate;
+    int16_t block_align;
+    int16_t bits_per_sample;
+    char    data_id[4];
+    int32_t data_size;
 } WavHeader;
 #pragma pack(pop)
 
-struct MemoryStruct { char *memory; size_t size; };
+typedef struct { char *data; size_t size; } ResponseBuf;
 
-static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp) {
-    size_t realsize = size * nmemb;
-    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
-    char *ptr = realloc(mem->memory, mem->size + realsize + 1);
-    if (!ptr) return 0;
-    mem->memory = ptr;
-    memcpy(&(mem->memory[mem->size]), contents, realsize);
-    mem->size += realsize;
-    mem->memory[mem->size] = 0;
-    return realsize;
+/* ---------- libcurl helpers ---------- */
+
+static size_t write_callback(void *src, size_t size, size_t nmemb, void *userp) {
+    size_t n = size * nmemb;
+    ResponseBuf *buf = userp;
+    char *p = realloc(buf->data, buf->size + n + 1);
+    if (!p) return 0;
+    buf->data = p;
+    memcpy(buf->data + buf->size, src, n);
+    buf->size += n;
+    buf->data[buf->size] = '\0';
+    return n;
 }
 
-// Ultra-fast fork execution without invoking an expensive system shell shell (/bin/sh)
-int exec_tool(char *args[]) {
+/* ---------- process helpers ---------- */
+
+static int exec_tool(const char *const args[]) {
     pid_t pid = fork();
     if (pid == 0) {
         int devnull = open("/dev/null", O_RDWR);
-        dup2(devnull, STDIN_FILENO);
-        dup2(devnull, STDOUT_FILENO);
-        dup2(devnull, STDERR_FILENO);
-        close(devnull);
-        execvp(args[0], args);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        execvp(args[0], (char *const *)args);
         _exit(127);
     }
     int status;
@@ -54,8 +71,7 @@ int exec_tool(char *args[]) {
     return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
-// Native pipe writing to xclip to drastically cut down RAM memory footprints
-void pipe_to_xclip(const char *text) {
+static void pipe_to_xclip(const char *text) {
     int pipefd[2];
     if (pipe(pipefd) == -1) return;
     pid_t pid = fork();
@@ -63,44 +79,130 @@ void pipe_to_xclip(const char *text) {
         close(pipefd[1]);
         dup2(pipefd[0], STDIN_FILENO);
         close(pipefd[0]);
-        char *args[] = {"xclip", "-selection", "clipboard", NULL};
-        execvp(args[0], args);
+        const char *args[] = {"xclip", "-selection", "clipboard", NULL};
+        execvp(args[0], (char *const *)args);
         _exit(127);
     }
     close(pipefd[0]);
-    write(pipefd[1], text, strlen(text));
+    (void)write(pipefd[1], text, strlen(text));
     close(pipefd[1]);
     waitpid(pid, NULL, 0);
 }
 
-// Unbinds UI keys explicitly to ensure execution inside modifier-heavy configurations
-void send_paste_macro(void) {
-    char *args[] = {"xdotool", "keyup", "alt", "shift", "space", "key", "ctrl+shift+v", NULL};
+/*
+ * Release any held modifier keys, then send Ctrl+Shift+V.
+ * Releasing Alt/Shift/Space first ensures the paste lands correctly
+ * in modifier-heavy keybinding setups.
+ */
+static void send_paste_macro(void) {
+    const char *args[] = {"xdotool", "keyup", "alt", "shift", "space",
+                          "key", "ctrl+shift+v", NULL};
     exec_tool(args);
 }
 
-void parse_and_paste(const char *json) {
+/* ---------- transcription helpers ---------- */
+
+/* Extract the "text" field from a Groq JSON response and paste it. */
+static void parse_and_paste(const char *json) {
     const char *p = strstr(json, "\"text\":");
     if (!p) return;
     p += 7;
     while (*p == ' ' || *p == '"') p++;
 
-    char *output = malloc(strlen(p) + 1);
-    size_t idx = 0;
-    while (*p && *p != '"') {
-        if (*p == '\\' && *(p+1) == 'n') { output[idx++] = '\n'; p += 2; }
-        else { output[idx++] = *p; p++; }
-    }
-    output[idx] = '\0';
+    char *out = malloc(strlen(p) + 1);
+    if (!out) return;
 
-    pipe_to_xclip(output);
+    size_t i = 0;
+    while (*p && *p != '"') {
+        if (*p == '\\' && *(p + 1) == 'n') { out[i++] = '\n'; p += 2; }
+        else out[i++] = *p++;
+    }
+    out[i] = '\0';
+
+    pipe_to_xclip(out);
     send_paste_macro();
-    free(output);
+    free(out);
 }
 
-void run_recording_session(void) {
+/* Read the Groq API key from ~/.config/voice2text/groq.key. */
+static void read_api_key(char *buf, size_t buflen) {
+    const char *home = getenv("HOME");
+    if (!home || !buflen) { if (buflen) buf[0] = '\0'; return; }
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.config/voice2text/groq.key", home);
+    FILE *f = fopen(path, "r");
+    if (!f) { buf[0] = '\0'; return; }
+    if (!fgets(buf, buflen, f)) buf[0] = '\0';
+    fclose(f);
+
+    buf[strcspn(buf, "\r\n")] = '\0';
+}
+
+/* POST AUDIO_FILE to the Groq Whisper API and paste the transcription. */
+static void transcribe_and_paste(const char *api_key) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return;
+
+    ResponseBuf chunk = { .data = malloc(1), .size = 0 };
+
+    char auth_header[512];
+    snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
+    struct curl_slist *headers = curl_slist_append(NULL, auth_header);
+
+    curl_mime *mime = curl_mime_init(curl);
+
+    curl_mimepart *part = curl_mime_addpart(mime);
+    curl_mime_name(part, "file");
+    curl_mime_filedata(part, AUDIO_FILE);
+    curl_mime_type(part, "audio/wav");
+
+    part = curl_mime_addpart(mime);
+    curl_mime_name(part, "model");
+    curl_mime_data(part, MODEL_NAME, CURL_ZERO_TERMINATED);
+
+    part = curl_mime_addpart(mime);
+    curl_mime_name(part, "language");
+    curl_mime_data(part, "en", CURL_ZERO_TERMINATED);
+
+    curl_easy_setopt(curl, CURLOPT_URL,           GROQ_URL);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER,    headers);
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST,      mime);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA,     &chunk);
+
+    if (curl_easy_perform(curl) == CURLE_OK)
+        parse_and_paste(chunk.data);
+
+    curl_mime_free(mime);
+    curl_slist_free_all(headers);
+    free(chunk.data);
+    curl_easy_cleanup(curl);
+}
+
+/* ---------- recording session ---------- */
+
+/* Populate a WavHeader for 16-bit mono PCM once total data size is known. */
+static void fill_wav_header(WavHeader *h, int32_t data_size) {
+    memcpy(h->riff,    "RIFF", 4);
+    h->file_size     = 36 + data_size;
+    memcpy(h->wave,    "WAVE", 4);
+    memcpy(h->fmt_id,  "fmt ", 4);
+    h->fmt_size      = 16;
+    h->format        = 1;   /* PCM */
+    h->channels      = 1;
+    h->sample_rate   = SAMPLE_RATE;
+    h->byte_rate     = SAMPLE_RATE * BYTES_PER_FRAME;
+    h->block_align   = BYTES_PER_FRAME;
+    h->bits_per_sample = 16;
+    memcpy(h->data_id, "data", 4);
+    h->data_size     = data_size;
+}
+
+/* Open the default ALSA capture device for 16-bit mono at SAMPLE_RATE. */
+static snd_pcm_t *open_capture_device(void) {
     snd_pcm_t *pcm;
-    if (snd_pcm_open(&pcm, "default", SND_PCM_STREAM_CAPTURE, 0) < 0) return;
+    if (snd_pcm_open(&pcm, "default", SND_PCM_STREAM_CAPTURE, 0) < 0) return NULL;
 
     snd_pcm_hw_params_t *params;
     snd_pcm_hw_params_alloca(&params);
@@ -108,105 +210,80 @@ void run_recording_session(void) {
     snd_pcm_hw_params_set_access(pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED);
     snd_pcm_hw_params_set_format(pcm, params, SND_PCM_FORMAT_S16_LE);
     snd_pcm_hw_params_set_channels(pcm, params, 1);
-    unsigned int rate = 16000;
+    unsigned int rate = SAMPLE_RATE;
     snd_pcm_hw_params_set_rate_near(pcm, params, &rate, NULL);
     snd_pcm_hw_params(pcm, params);
     snd_pcm_prepare(pcm);
+    return pcm;
+}
 
-    FILE *f = fopen(AUDIO_FILE, "wb");
+/* Returns 1 if the lock file signals stop ('S') or has been removed. */
+static int stop_requested(void) {
+    int fd = open(LOCK_FILE, O_RDONLY);
+    if (fd < 0) return 1;
+    char ch = 0;
+    (void)read(fd, &ch, 1);
+    close(fd);
+    return ch == 'S';
+}
+
+static void run_recording_session(void) {
+    snd_pcm_t *pcm = open_capture_device();
+    if (!pcm) return;
+
+    FILE *wav = fopen(AUDIO_FILE, "wb");
+    if (!wav) { snd_pcm_close(pcm); return; }
+
     WavHeader header = {0};
-    fwrite(&header, sizeof(header), 1, f);
+    fwrite(&header, sizeof(header), 1, wav);   /* placeholder; rewritten after loop */
 
-    short buf[512];
-    long long total_bytes = 0;
+    int16_t buf[BUFFER_FRAMES];
+    int32_t total_bytes = 0;
 
-    // Low-overhead polling loop checking for the stop modifier signal inside the lockfile
-    while (1) {
-        int lfd = open(LOCK_FILE, O_RDONLY);
-        if (lfd >= 0) {
-            char check = 0;
-            read(lfd, &check, 1);
-            close(lfd);
-            if (check == 'S') break; // Received stop signal
-        } else {
-            break; // Lockfile removed unexpectedly
-        }
-
-        snd_pcm_sframes_t frames = snd_pcm_readi(pcm, buf, 512);
+    while (!stop_requested()) {
+        snd_pcm_sframes_t frames = snd_pcm_readi(pcm, buf, BUFFER_FRAMES);
         if (frames < 0) frames = snd_pcm_recover(pcm, frames, 0);
         if (frames > 0) {
-            fwrite(buf, 1, frames * 2, f);
-            total_bytes += (frames * 2);
+            fwrite(buf, 1, frames * BYTES_PER_FRAME, wav);
+            total_bytes += frames * BYTES_PER_FRAME;
         }
     }
 
-    // Wrap up WAV headers natively
-    memcpy(header.riff, "RIFF", 4); header.overall_size = 36 + total_bytes;
-    memcpy(header.wave, "WAVE", 4); memcpy(header.fmt_chunk_marker, "fmt ", 4);
-    header.length_of_fmt = 16; header.format_type = 1; header.channels = 1;
-    header.sample_rate = 16000; header.byterate = 32000; header.block_align = 2;
-    header.bits_per_sample = 16; memcpy(header.data_chunk_header, "data", 4);
-    header.data_size = total_bytes;
-
-    fseek(f, 0, SEEK_SET);
-    fwrite(&header, sizeof(header), 1, f);
-    fclose(f);
+    fill_wav_header(&header, total_bytes);
+    rewind(wav);
+    fwrite(&header, sizeof(header), 1, wav);
+    fclose(wav);
     snd_pcm_close(pcm);
 
-    // Call API natively via libcurl
     char api_key[256] = {0};
-    char path[512];
-    snprintf(path, sizeof(path), "%s/.config/voice2text/groq.key", getenv("HOME"));
-    FILE *kf = fopen(path, "r");
-    if (kf) { fgets(api_key, sizeof(api_key), kf); fclose(kf); }
-    char *nl = strchr(api_key, '\n'); if (nl) *nl = '\0';
-    nl = strchr(api_key, '\r'); if (nl) *nl = '\0';
+    read_api_key(api_key, sizeof(api_key));
+    if (api_key[0]) transcribe_and_paste(api_key);
 
-    CURL *curl = curl_easy_init();
-    if (curl) {
-        struct MemoryStruct chunk = { .memory = malloc(1), .size = 0 };
-        char auth[512]; snprintf(auth, sizeof(auth), "Authorization: Bearer %s", api_key);
-        struct curl_slist *headers = curl_slist_append(NULL, auth);
-
-        curl_mime *mime = curl_mime_init(curl);
-        curl_mimepart *part = curl_mime_addpart(mime);
-        curl_mime_name(part, "file"); curl_mime_filedata(part, AUDIO_FILE); curl_mime_type(part, "audio/wav");
-        part = curl_mime_addpart(mime);
-        curl_mime_name(part, "model"); curl_mime_data(part, MODEL_NAME, CURL_ZERO_TERMINATED);
-
-        curl_easy_setopt(curl, CURLOPT_URL, GROQ_URL);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
-        if (curl_easy_perform(curl) == CURLE_OK) {
-            parse_and_paste(chunk.memory);
-        }
-
-        curl_mime_free(mime);
-        curl_slist_free_all(headers);
-        free(chunk.memory);
-        curl_easy_cleanup(curl);
-    }
     unlink(AUDIO_FILE);
     unlink(LOCK_FILE);
 }
 
-int main(void) {
-    int fd = open(LOCK_FILE, O_CREAT | O_EXCL | O_WRONLY, 0666);
-    if (fd < 0) {
-        // File already exists! Write the stop character to toggle recording off.
-        int signalfd = open(LOCK_FILE, O_WRONLY);
-        if (signalfd >= 0) {
-            write(signalfd, "S", 1);
-            close(signalfd);
-        }
-        return 0;
-    }
-    close(fd);
+/* ---------- entry point ---------- */
 
-    // This is the single active instance doing the heavy lifting
+/* Try to create the lock file exclusively. Returns the fd on success, -1 if
+   another instance is already running. */
+static int try_acquire_lock(void) {
+    return open(LOCK_FILE, O_CREAT | O_EXCL | O_WRONLY, 0666);
+}
+
+/* Signal the running instance to stop by writing 'S' to the lock file. */
+static void signal_stop(void) {
+    int fd = open(LOCK_FILE, O_WRONLY);
+    if (fd >= 0) {
+        (void)write(fd, "S", 1);
+        close(fd);
+    }
+}
+
+int main(void) {
+    int fd = try_acquire_lock();
+    if (fd < 0) { signal_stop(); return 0; }
+    close(fd);
     run_recording_session();
     return 0;
 }
