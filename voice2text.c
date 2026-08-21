@@ -16,8 +16,8 @@
 #define MODEL_NAME      "whisper-large-v3-turbo"
 #define SAMPLE_RATE     16000
 #define BUFFER_FRAMES   512
-#define BYTES_PER_FRAME 2   /* S16_LE mono */
-#define MAX_RECORD_SECS 120 /* safety cap: auto-stop after 2 min if forgotten */
+#define BYTES_PER_FRAME 2
+#define MAX_RECORD_SECS 120
 
 #pragma pack(push, 1)
 typedef struct {
@@ -26,7 +26,7 @@ typedef struct {
     char    wave[4];
     char    fmt_id[4];
     int32_t fmt_size;
-    int16_t format;         /* 1 = PCM */
+    int16_t format;
     int16_t channels;
     int32_t sample_rate;
     int32_t byte_rate;
@@ -39,8 +39,6 @@ typedef struct {
 
 typedef struct { char *data; size_t size; } ResponseBuf;
 
-/* ---------- libcurl helpers ---------- */
-
 static size_t write_callback(void *src, size_t size, size_t nmemb, void *userp) {
     size_t n = size * nmemb;
     ResponseBuf *buf = userp;
@@ -52,8 +50,6 @@ static size_t write_callback(void *src, size_t size, size_t nmemb, void *userp) 
     buf->data[buf->size] = '\0';
     return n;
 }
-
-/* ---------- process helpers ---------- */
 
 static int exec_tool(const char *const args[]) {
     pid_t pid = fork();
@@ -91,20 +87,12 @@ static void pipe_to_xclip(const char *text) {
     waitpid(pid, NULL, 0);
 }
 
-/*
- * Release any held modifier keys, then send Ctrl+Shift+V.
- * Releasing Alt/Shift/Space first ensures the paste lands correctly
- * in modifier-heavy keybinding setups.
- */
 static void send_paste_macro(void) {
     const char *args[] = {"xdotool", "keyup", "alt", "shift", "space",
                           "key", "ctrl+shift+v", NULL};
     exec_tool(args);
 }
 
-/* ---------- transcription helpers ---------- */
-
-/* Extract the "text" field from a Groq JSON response and paste it. */
 static void parse_and_paste(const char *json) {
     const char *p = strstr(json, "\"text\":");
     if (!p) return;
@@ -126,7 +114,6 @@ static void parse_and_paste(const char *json) {
     free(out);
 }
 
-/* Read the Groq API key from ~/.config/voice2text/groq.key. */
 static void read_api_key(char *buf, size_t buflen) {
     const char *home = getenv("HOME");
     if (!home || !buflen) { if (buflen) buf[0] = '\0'; return; }
@@ -141,7 +128,6 @@ static void read_api_key(char *buf, size_t buflen) {
     buf[strcspn(buf, "\r\n")] = '\0';
 }
 
-/* POST AUDIO_FILE to the Groq Whisper API and paste the transcription. */
 static void transcribe_and_paste(const char *api_key) {
     CURL *curl = curl_easy_init();
     if (!curl) return;
@@ -167,11 +153,16 @@ static void transcribe_and_paste(const char *api_key) {
     curl_mime_name(part, "language");
     curl_mime_data(part, "en", CURL_ZERO_TERMINATED);
 
-    curl_easy_setopt(curl, CURLOPT_URL,           GROQ_URL);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER,    headers);
-    curl_easy_setopt(curl, CURLOPT_MIMEPOST,      mime);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA,     &chunk);
+    curl_easy_setopt(curl, CURLOPT_URL,             GROQ_URL);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER,      headers);
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST,        mime);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,   write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA,       &chunk);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL,        1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,  10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT,         300L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,  30L);
 
     if (curl_easy_perform(curl) == CURLE_OK)
         parse_and_paste(chunk.data);
@@ -182,16 +173,13 @@ static void transcribe_and_paste(const char *api_key) {
     curl_easy_cleanup(curl);
 }
 
-/* ---------- recording session ---------- */
-
-/* Populate a WavHeader for 16-bit mono PCM once total data size is known. */
 static void fill_wav_header(WavHeader *h, int32_t data_size) {
     memcpy(h->riff,    "RIFF", 4);
     h->file_size     = 36 + data_size;
     memcpy(h->wave,    "WAVE", 4);
     memcpy(h->fmt_id,  "fmt ", 4);
     h->fmt_size      = 16;
-    h->format        = 1;   /* PCM */
+    h->format        = 1;
     h->channels      = 1;
     h->sample_rate   = SAMPLE_RATE;
     h->byte_rate     = SAMPLE_RATE * BYTES_PER_FRAME;
@@ -201,7 +189,6 @@ static void fill_wav_header(WavHeader *h, int32_t data_size) {
     h->data_size     = data_size;
 }
 
-/* Open the default ALSA capture device for 16-bit mono at SAMPLE_RATE. */
 static snd_pcm_t *open_capture_device(void) {
     snd_pcm_t *pcm;
     if (snd_pcm_open(&pcm, "default", SND_PCM_STREAM_CAPTURE, 0) < 0) return NULL;
@@ -219,8 +206,6 @@ static snd_pcm_t *open_capture_device(void) {
     return pcm;
 }
 
-/* Returns 1 if the lock file signals stop ('S'), has been removed, or the
-   safety time cap has been exceeded. start_sec is the session start time. */
 static int stop_requested(time_t start_sec) {
     int fd = open(LOCK_FILE, O_RDONLY);
     if (fd < 0) return 1;
@@ -239,7 +224,7 @@ static void run_recording_session(void) {
     if (!wav) { snd_pcm_close(pcm); return; }
 
     WavHeader header = {0};
-    fwrite(&header, sizeof(header), 1, wav);   /* placeholder; rewritten after loop */
+    fwrite(&header, sizeof(header), 1, wav);
 
     int16_t buf[BUFFER_FRAMES];
     int32_t total_bytes = 0;
@@ -260,23 +245,19 @@ static void run_recording_session(void) {
     fclose(wav);
     snd_pcm_close(pcm);
 
+    unlink(LOCK_FILE);
+
     char api_key[256] = {0};
     read_api_key(api_key, sizeof(api_key));
     if (api_key[0]) transcribe_and_paste(api_key);
 
     unlink(AUDIO_FILE);
-    unlink(LOCK_FILE);
 }
 
-/* ---------- entry point ---------- */
-
-/* Try to create the lock file exclusively. Returns the fd on success, -1 if
-   another instance is already running. */
 static int try_acquire_lock(void) {
     return open(LOCK_FILE, O_CREAT | O_EXCL | O_WRONLY, 0666);
 }
 
-/* Signal the running instance to stop by writing 'S' to the lock file. */
 static void signal_stop(void) {
     int fd = open(LOCK_FILE, O_WRONLY);
     if (fd >= 0) {
