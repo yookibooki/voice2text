@@ -1,24 +1,27 @@
 # voice2text
 
-Voice-to-text for Linux via Groq's Whisper API. Records audio on demand, transcribes it, and pastes the result into the active window.
+Dictation toggle for Linux. Press the hotkey to record, press again to transcribe and paste.
+
+Fork-per-press shell script. No daemon, no global key grabs, no lock files. The window manager owns the hotkeys.
 
 ## Usage
 
-Press `ALT+SPACE` (bind this in your window manager) to toggle recording. Transcribed text is pasted via `xdotool` (`Ctrl+Shift+V`).
-
 ```bash
-# build
-gcc -O3 voice2text.c -o ~/.local/bin/voice2text -lasound -lcurl
-
-# set API key
-echo "gsk_..." > ~/.config/voice2text/groq.key
+cp voice2text.sh ~/.local/bin/voice2text && chmod +x ~/.local/bin/voice2text
+export GROQ_API_KEY="gsk_..."
 ```
 
-## Requirements
+```bash
+bindsym Mod1+Space exec --no-startup-id voice2text
+```
 
-- Linux with ALSA (`libasound-dev`)
-- `libcurl` (`libcurl4-openssl-dev`)
-- `xdotool`, `xclip`
-- A [Groq API key](https://console.groq.com/keys) (free tier available)
+Press `Alt+Space` → recording starts. Press again → the audio goes to Groq and the transcript is typed into the focused window.
 
-Bind `ALT+SPACE` → `voice2text` in i3/sway/whatever.
+## How it works
+
+1. First press: `arecord` (16 kHz mono S16LE) captures to `/tmp/voice2text.wav`, its pid goes to `/tmp/voice2text.pid`
+2. Second press: the pidfile pid is signalled; on next press a new capture overwrites the file
+3. `curl` POSTs the WAV to Groq's transcription API; `jq` extracts the text
+4. `xdotool type` synthesises the keystrokes into the focused window
+
+Requirements: `alsa-utils`, `curl`, `jq`, `xdotool`. API key via `$GROQ_API_KEY`. Transcription language: English.
