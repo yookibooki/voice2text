@@ -5,7 +5,7 @@ Sole purpose:
 3. Gets transcription back
 4. Pastes into focused window via OS clipboard (Linux xclip/wl-copy → xdotool/wtype, macOS pbcopy → osascript Cmd+V, Windows Set-Clipboard → SendKeys Ctrl+V)
 Scripts (no build, no daemon, no comments):
-- voice2text.sh (Linux, ~/.local/bin/voice2text): `arecord -q -t raw -f S16_LE -r 16000 -c 1 | opusenc --raw` → `${XDG_RUNTIME_DIR:-/tmp}/v2t.ogg` (0700 tmpfs per-user isolation, RAM, no cp/symlink/UID); `pkill -2 arecord` + `pgrep opusenc` wait; `curl -F file=@$O | jq`; `rm` after
+- voice2text.sh (Linux, ~/.local/bin/voice2text): `arecord -q -t raw -f S16_LE -r 16000 -c 1 | opusenc --raw` → `DIR="${XDG_RUNTIME_DIR:-/tmp/v2t-$(id -u)}"; mkdir -p -m 700 "$DIR"; O="$DIR/v2t.ogg"` (0700 per-user tmpfs/RAM, no cp/symlink); `pkill -2 arecord -q -t raw -f S16_LE -r 16000` + `pgrep opusenc` wait; `curl -F file=@$O | jq`; `rm` after; `wtype -M ctrl -M shift -P v -p v` (precise)
 - voice2text-macos.sh (macOS, ~/bin/voice2text): `swift AVAudioRecorder` (SIGINT → r.stop()) → `${TMPDIR:-/tmp}/v2t.wav` (per-user TMPDIR 0700, no cp); `pkill -2 swift`; `curl | python3 -c json`; `pbcopy` + `osascript`
 - voice2text.ps1 (Windows, %USERPROFILE%\bin\voice2text.ps1): `winmm mciSendString waveaudio` → `$env:TEMP\v2t.wav` (per-user TEMP, flag file lock during curl, no cp); `curl.exe | ConvertFrom-Json`; `Set-Clipboard` + `SendKeys ^v`
 Installers (built-in only, idempotent PATH, sanitized GROQ key, chmod 600 rc):
