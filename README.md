@@ -2,164 +2,118 @@
 
 Press `Alt+Space` to record, press again to paste the transcription where your cursor is.
 
-One file, no daemon, works offline except for the transcription request to Groq.
+One file, no daemon. Records locally, sends only the audio to Groq Whisper for transcription.
 
----
+## Highlights
 
-## Get a key
+- Instant toggle — no waiting for app to open
+- Cross-platform — Linux, macOS, Windows (one file per OS)
+- Minimal — built-in tools only, no `ffmpeg`, `pulseaudio`, or daemon
+- Private — audio deleted after upload (`rm`), key stays in your shell rc (`chmod 600`)
 
-Free at [console.groq.com/keys](https://console.groq.com/keys) → create `gsk_...` key. Or let the installer prompt you.
+## Prerequisites
 
----
+- Groq key: [console.groq.com/keys](https://console.groq.com/keys) → `gsk_...`
+- Linux: `alsa-utils`, `opus-tools`, `curl`, `jq` + `xdotool`/`xclip` (X11) or `wtype`/`wl-clipboard` (Wayland)
+- macOS: Xcode CLT for `swift` (`xcode-select --install`), plus `curl`, `python3` (both built-in)
+- Windows: `curl.exe`, `winmm`, PowerShell (all built-in)
 
-## Easy install
+Check: `arecord -l` (Linux), `swift --version` (macOS), `curl.exe --version` (Windows)
+
+## Installation
+
+### Easy (recommended)
 
 ```bash
-# Linux or macOS — one file for both
+# Linux or macOS — one installer for both
 ./install.sh
-source ~/.bashrc  # Linux (current shell only)
-source ~/.zshrc   # macOS (current shell only)
+source ~/.bashrc  # Linux, current shell only
+source ~/.zshrc   # macOS, current shell only
 ```
 ```powershell
-# Windows — right-click Run with PowerShell, or:
+# Windows — right-click → Run with PowerShell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-What the installers do: `mkdir -p`, idempotent `PATH` append, `GROQ_API_KEY` prompt (saved with `chmod 600` on Unix), and symlink/copy of the script. **Only Windows creates the `Alt+Space` shortcut** (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\voice2text.lnk` with `-WindowStyle Hidden` and `Hotkey Alt+Space`). **On Linux and macOS you still need to create the hotkey manually** — see sections below.
+What it does: `mkdir -p`, idempotent `PATH` append, prompts for `GROQ_API_KEY` (saved `chmod 600`), copies/symlinks the script. **Only Windows creates the `Alt+Space` shortcut** (`Start Menu\voice2text.lnk` with `-WindowStyle Hidden`). On Linux/macOS create the hotkey manually (below). Log out/in after install so hotkeys see the new `PATH`/`GROQ_API_KEY` (or use absolute path in shortcut).
 
-> `source ~/.bashrc` / `source ~/.zshrc` only affects the current terminal. Window managers, desktop hotkeys, and Automator services read `~/.profile` / `~/.zshrc` at login, so **log out and back in** (or reload your WM: `i3-msg reload` / `swaymsg reload`) for the new `PATH`/`GROQ_API_KEY` to be visible to the hotkey. Alternatively set the hotkey command to the absolute path (`$HOME/.local/bin/voice2text` or `$HOME/bin/voice2text`).
+### Manual — Linux
 
----
-
-## Linux — manual
-
-### 1. Install
-
-**X11** (i3, XFCE, Cinnamon, LXQt, GNOME/KDE on X11):
 ```bash
-# Debian/Ubuntu
-sudo apt install alsa-utils curl jq opus-tools xdotool xclip
-# Arch
-sudo pacman -S alsa-utils curl jq opus-tools xdotool xclip
-# Fedora
-sudo dnf install alsa-utils curl jq opus-tools xdotool xclip
+# X11
+sudo apt install alsa-utils curl jq opus-tools xdotool xclip      # Debian/Ubuntu
+sudo pacman -S alsa-utils curl jq opus-tools xdotool xclip        # Arch
+# Wayland
+sudo apt install alsa-utils curl jq opus-tools wtype wl-clipboard # Debian/Ubuntu
 ```
-
-**Wayland** (Sway, Hyprland, Wayfire, River):
-```bash
-# Debian/Ubuntu
-sudo apt install alsa-utils curl jq opus-tools wtype wl-clipboard
-# Arch
-sudo pacman -S alsa-utils curl jq opus-tools wtype wl-clipboard
-# Fedora
-sudo dnf install alsa-utils curl jq opus-tools wtype wl-clipboard
-```
-
-> Not sure? Run `echo $XDG_SESSION_TYPE` — it prints `x11` or `wayland`.
-> GNOME Wayland and KDE Wayland need an X11 session for paste to work.
-
-### 2. Link and PATH
-
-Run from the cloned repo directory (don't copy the `$PWD` line blindly — `$PWD` is fragile if you move the repo; `install.sh` uses `D="$(cd "$(dirname "$0")" && pwd)"` for a repo-relative absolute path):
+> `echo $XDG_SESSION_TYPE` → `x11` or `wayland`. GNOME/KDE Wayland need X11 session for paste.
 
 ```bash
 mkdir -p ~/.local/bin
-D="$(cd "$(dirname "$0")" && pwd)"
-ln -sf "$D/voice2text.sh" ~/.local/bin/voice2text
-# idempotent PATH — add to BOTH files: .profile is read at login (hotkeys), .bashrc at interactive shells
-grep -q '.local/bin' ~/.profile 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+D="$(cd "$(dirname "$0")" && pwd)"; ln -sf "$D/voice2text.sh" ~/.local/bin/voice2text
+grep -q '.local/bin' ~/.profile || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
+grep -q '.local/bin' ~/.bashrc  || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+grep -q GROQ_API_KEY ~/.bashrc || echo 'export GROQ_API_KEY="gsk_..."' >> ~/.bashrc; chmod 600 ~/.bashrc ~/.profile; source ~/.bashrc
 ```
 
-### 3. API key
+Hotkey: `bindsym Mod1+space exec --no-startup-id voice2text` → `i3-msg reload` (or GNOME Settings → Keyboard → Custom → `Alt+Space`).
 
-```bash
-# add to both so hotkeys (login shell) and terminals see it; keep rc private
-echo 'export GROQ_API_KEY="gsk_..."' >> ~/.bashrc; chmod 600 ~/.bashrc
-grep -q GROQ_API_KEY ~/.profile 2>/dev/null || echo 'export GROQ_API_KEY="gsk_..."' >> ~/.profile; chmod 600 ~/.profile
-# current shell only — hotkey needs logout/login or WM reload
-source ~/.bashrc
-```
-
-### 4. Hotkey
-
-```bash
-bindsym Mod1+space exec --no-startup-id voice2text
-```
-Then `i3-msg reload` or `swaymsg reload`.
-
-**GNOME** — Settings → Keyboard → Custom Shortcuts → `+` → Command `voice2text` (or `$HOME/.local/bin/voice2text` if PATH not yet reloaded) → `Alt+Space`.
-
-**KDE** — System Settings → Keyboard → Shortcuts → Add → Command `voice2text` → `Alt+Space`.
-
-> If the hotkey says "command not found", log out/in so `~/.profile` PATH is picked up, or use the absolute path in the shortcut.
-
----
-
-## macOS — manual
-
-No extra install — uses built-in `curl`, `python3`, `pbcopy`, `osascript`, and `swift` (requires **Xcode Command Line Tools**; if `swift` is missing run `xcode-select --install` and follow the prompt).
+### Manual — macOS
 
 ```bash
 mkdir -p ~/bin
-D="$(cd "$(dirname "$0")" && pwd)"
-ln -sf "$D/voice2text-macos.sh" ~/bin/voice2text
-grep -q 'HOME/bin' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+D="$(cd "$(dirname "$0")" && pwd)"; ln -sf "$D/voice2text-macos.sh" ~/bin/voice2text
+grep -q 'HOME/bin' ~/.zshrc || echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
 echo 'export GROQ_API_KEY="gsk_..."' >> ~/.zshrc; chmod 600 ~/.zshrc; source ~/.zshrc
-# source only affects current shell — log out/in for Automator/Services to see new env
 ```
+> If `swift: command not found` → `xcode-select --install`. Use `$HOME/bin/voice2text` in Automator ( `~` doesn't expand).
 
-Hotkey: Automator → Quick Action → Run Shell Script → enter `$HOME/bin/voice2text` (don't use `~/bin/voice2text` — `~` does **not** expand in Automator's shell) → System Settings → Keyboard → Shortcuts → Services → assign `Alt+Space`.
+Hotkey: Automator → Quick Action → Run Shell Script `$HOME/bin/voice2text` → System Settings → Keyboard → Shortcuts → Services → `Alt+Space`. Grant Microphone + Accessibility when prompted.
 
-**Permissions** (required on first run): System Settings → Privacy & Security → **Microphone** and **Accessibility** → allow `Terminal` / `Automator` / the app running the script. Without these, recording is silent and paste is blocked.
-
----
-
-## Windows — manual
-
-No extra install — uses built-in `curl.exe`, `winmm`, `Set-Clipboard`, `SendKeys`.
+### Manual — Windows
 
 ```powershell
 mkdir $env:USERPROFILE\bin -Force
 Copy-Item $PSScriptRoot\voice2text.ps1 $env:USERPROFILE\bin\voice2text.ps1 -Force
-# or if running manually from repo: Copy-Item $PWD\voice2text.ps1 $env:USERPROFILE\bin\voice2text.ps1 -Force
-$P=[Environment]::GetEnvironmentVariable("Path","User"); if ($P -notlike "*$env:USERPROFILE\bin*") {setx PATH "$P;$env:USERPROFILE\bin" | Out-Null}
-setx GROQ_API_KEY "gsk_..." | Out-Null
+$P=[Environment]::GetEnvironmentVariable("Path","User"); if ($P -notlike "*$env:USERPROFILE\bin*") {setx PATH "$P;$env:USERPROFILE\bin"}
+setx GROQ_API_KEY "gsk_..."
+```
+> Close and reopen PowerShell after `setx`. If `Running scripts is disabled` → `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+Hotkey: `install.ps1` creates `%APPDATA%\Microsoft\Windows\Start Menu\Programs\voice2text.lnk` → `powershell.exe -WindowStyle Hidden -File %USERPROFILE%\bin\voice2text.ps1` with `Alt+Space`. For manual, create shortcut there with same Target and `-WindowStyle Hidden`.
+
+### Verify
+
+```bash
+which voice2text          # Linux/macOS
+echo $GROQ_API_KEY | cut -c1-8  # should show gsk_...
+# Windows
+Get-Command voice2text.ps1; echo $env:GROQ_API_KEY
 ```
 
-Hotkey: `install.ps1` creates `%APPDATA%\Microsoft\Windows\Start Menu\Programs\voice2text.lnk` → `powershell.exe -WindowStyle Hidden -File %USERPROFILE%\bin\voice2text.ps1` with `Alt+Space`. For manual: create shortcut there, set Target as above, add `-WindowStyle Hidden` to avoid console flash, then assign `Alt+Space`.
-
-> **ExecutionPolicy**: if scripts are blocked, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass` or launch with `powershell -ExecutionPolicy Bypass -File .\install.ps1` / `powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\bin\voice2text.ps1`.
-> **`setx` needs a new shell**: it writes to the registry and does **not** affect the current terminal — close and reopen PowerShell (or log out/in) for new `PATH`/`GROQ_API_KEY` to be visible. `install.ps1` also updates `$env:PATH` for the current session only.
-
----
-
-## Use
+## Usage
 
 1. Click a text field.
 2. Press `Alt+Space` — speak.
-3. Press `Alt+Space` again — text appears and stays in clipboard:
-   - Linux: `Ctrl+Shift+V` (fallback `Ctrl+V` via `xdotool`/`wtype`)
-   - macOS: `Cmd+V` via `pbcopy` + `osascript`
-   - Windows: `Ctrl+V` via `Set-Clipboard` + `SendKeys`
+3. Press `Alt+Space` again — text appears (Linux `Ctrl+Shift+V`, macOS `Cmd+V`, Windows `Ctrl+V`) and stays in clipboard.
+
 > If a terminal is focused, text types at the prompt — focus your destination first.
 
----
+## Configuration
 
-## Uninstall
+- Change Groq model: edit `model=whisper-large-v3-turbo` in `voice2text.sh:14`
+- Re-record cancels via second press during `arecord`; early `GROQ_API_KEY` missing exits silently — set key first.
 
-```bash
-# Linux
-rm ~/.local/bin/voice2text
-# macOS
-rm ~/bin/voice2text
-# then edit ~/.bashrc, ~/.profile (Linux) / ~/.zshrc (macOS) to remove PATH and GROQ_API_KEY lines, chmod 600 if needed
-```
-```powershell
-# Windows
-Remove-Item $env:USERPROFILE\bin\voice2text.ps1
-Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\voice2text.lnk"
-# then remove PATH entry and GROQ_API_KEY via System → Environment Variables (or setx), and restart shell
-```
+## Docs
 
-Then remove the `Alt+Space` shortcut (Linux window manager, macOS Automator service, Windows `.lnk`).
+- Agent guide: `AGENTS.md`
+- Scripts: `voice2text.sh:raw`, `voice2text-macos.sh:raw`, `voice2text.ps1:raw`
+- Installers: `install.sh:raw`, `install.ps1:raw`
+
+## License
+
+MIT — see `LICENSE` (or treat as personal script, no warranty).
+
+## Acknowledgements
+
+Built on `arecord`/`opusenc`, Groq Whisper, `xclip`/`xdotool`/`wtype`, `swift`/`AVFoundation`, `winmm`. Thanks to testers on i3, Sway, and Hyprland.
