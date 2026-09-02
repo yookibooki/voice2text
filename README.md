@@ -1,100 +1,118 @@
 # voice2text
 
-Press `Alt+Space` to record. Press again to transcribe and paste where your cursor is.
+Press `Alt+Space` to record, press again to paste the transcription where your cursor is.
 
-One shell script. No daemon. No background service.
-
-`arecord -q -t raw | opusenc` → Groq Whisper (`whisper-large-v3-turbo`) → `xclip`/`wl-copy` → `xdotool`/`wtype` `Ctrl+Shift+V` — records to `/tmp/v2t.ogg` (Opus-in-OGG, `umask 077`, deleted after upload)
+One file, no daemon, works offline except for the transcription request to Groq.
 
 ---
 
-## Requirements — only these (`procps` for `pkill`/`pgrep` is standard)
+## Get a key
 
-- Base (both): `alsa-utils` (`arecord`), `opus-tools` (`opusenc`), `curl`, `jq`
-- **X11** (i3, XFCE, Cinnamon, LXQt, GNOME/KDE on X11): `xdotool` `xclip`
-- **Wayland** (Sway, Hyprland, Wayfire, River, COSMIC): `wtype` `wl-clipboard`
-
-No `ffmpeg`, `pulseaudio`/`pipewire`, `sox`, or daemon — `arecord -q -t raw | opusenc --raw` writes `/tmp/v2t.ogg` directly.
-> GNOME Wayland (Mutter) and KDE Plasma Wayland (KWin) don't expose the virtual-keyboard protocol `wtype` needs. Use an X11 session on those.
-
-Get a free API key at [console.groq.com/keys](https://console.groq.com/keys).
-
----
-
-## Install
-
-**1. Dependencies — pick your distro**
-
-Debian / Ubuntu
-
-```bash
-sudo apt install alsa-utils curl jq opus-tools xdotool xclip      # X11
-# or
-sudo apt install alsa-utils curl jq opus-tools wtype wl-clipboard # Wayland
-```
-
-Arch Linux
-
-```bash
-sudo pacman -S alsa-utils curl jq opus-tools xdotool xclip      # X11
-# or
-sudo pacman -S alsa-utils curl jq opus-tools wtype wl-clipboard # Wayland
-```
-
-Fedora
-
-```bash
-sudo dnf install alsa-utils curl jq opus-tools xdotool xclip      # X11
-# or
-sudo dnf install alsa-utils curl jq opus-tools wtype wl-clipboard # Wayland
-```
-
-**2. Link the script**
-
-```bash
-ln -sf "$PWD/voice2text.sh" ~/.local/bin/voice2text
-```
-
-**3. Add your key**
+Free at [console.groq.com/keys](https://console.groq.com/keys) → create `gsk_...` key.
 
 ```bash
 echo 'export GROQ_API_KEY="gsk_..."' >> ~/.bashrc && source ~/.bashrc
 ```
 
-Add the hotkey:
+---
 
-**i3 / Sway / Hyprland**
+## Linux
 
+### 1. Install
+
+**X11** (i3, XFCE, Cinnamon, LXQt, GNOME/KDE on X11):
 ```bash
-# ~/.config/i3/config or ~/.config/sway/config
-bindsym Mod1+space exec --no-startup-id voice2text
-# then: i3-msg reload  /  swaymsg reload
+# Debian/Ubuntu
+sudo apt install alsa-utils curl jq opus-tools xdotool xclip
+# Arch
+sudo pacman -S alsa-utils curl jq opus-tools xdotool xclip
+# Fedora
+sudo dnf install alsa-utils curl jq opus-tools xdotool xclip
 ```
 
-**GNOME** — Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts → `+` → Command: `voice2text` → Shortcut: `Alt+Space`
+**Wayland** (Sway, Hyprland, Wayfire, River):
+```bash
+# Debian/Ubuntu
+sudo apt install alsa-utils curl jq opus-tools wtype wl-clipboard
+# Arch
+sudo pacman -S alsa-utils curl jq opus-tools wtype wl-clipboard
+# Fedora
+sudo dnf install alsa-utils curl jq opus-tools wtype wl-clipboard
+```
 
-**KDE** — System Settings → Keyboard → Shortcuts → Add New → Command: `voice2text` → Shortcut: `Alt+Space`
+> Not sure? Run `echo $XDG_SESSION_TYPE` — it prints `x11` or `wayland`.
+> GNOME Wayland and KDE Wayland need an X11 session for paste to work.
 
-Check: `echo $XDG_SESSION_TYPE` → `x11` or `wayland` to know which dependency set you need.
+### 2. Link
+
+```bash
+ln -sf "$PWD/voice2text.sh" ~/.local/bin/voice2text
+```
+
+### 3. Hotkey
+
+**i3 / Sway / Hyprland** — add to config:
+```bash
+bindsym Mod1+space exec --no-startup-id voice2text
+```
+Then `i3-msg reload` or `swaymsg reload`.
+
+**GNOME** — Settings → Keyboard → Custom Shortcuts → `+` → Command `voice2text` → `Alt+Space`.
+
+**KDE** — System Settings → Keyboard → Shortcuts → Add → Command `voice2text` → `Alt+Space`.
+
+---
+
+## macOS
+
+No extra install — uses built-in `swift`, `curl`, `pbcopy`, `osascript`.
+
+```bash
+mkdir -p ~/bin
+ln -sf "$PWD/voice2text-macos.sh" ~/bin/voice2text
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+echo 'export GROQ_API_KEY="gsk_..."' >> ~/.zshrc && source ~/.zshrc
+```
+
+Hotkey: Automator → Quick Action → Run Shell Script `~/bin/voice2text` → System Settings → Keyboard → Shortcuts → Services → assign `Alt+Space`.
+
+---
+
+## Windows
+
+No extra install — uses built-in `curl.exe`, `winmm`, `Set-Clipboard`, `SendKeys`.
+
+```powershell
+mkdir $env:USERPROFILE\bin -Force
+Copy-Item $PWD\voice2text.ps1 $env:USERPROFILE\bin\voice2text.ps1
+setx PATH "$env:PATH;$env:USERPROFILE\bin"
+setx GROQ_API_KEY "gsk_..."
+```
+
+Hotkey: Create shortcut to `powershell -File %USERPROFILE%\bin\voice2text.ps1` → Properties → Shortcut key `Alt+Space`.
 
 ---
 
 ## Use
 
-1. Focus a text field.
-2. Press `Alt+Space` — recording starts (silent).
-3. Speak, press `Alt+Space` again — text is pasted via `Ctrl+Shift+V`.
-
-The transcript also stays in your clipboard.
-
-> If a terminal has focus, the text will be typed at the prompt. Focus the destination first.
+1. Click a text field.
+2. Press `Alt+Space` — speak.
+3. Press `Alt+Space` again — text appears via `Ctrl+Shift+V`. It also stays in your clipboard.
+> If a terminal is focused, text types at the prompt — focus your destination first.
 
 ---
 
 ## Uninstall
 
 ```bash
+# Linux
 rm ~/.local/bin/voice2text
+# macOS
+rm ~/bin/voice2text
+```
+```powershell
+# Windows
+Remove-Item $env:USERPROFILE\bin\voice2text.ps1
 ```
 
-Then remove the keybinding from your window manager.
+Then remove the `Alt+Space` shortcut from your window manager.
