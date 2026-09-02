@@ -9,8 +9,9 @@ if (Test-Path $F) {
 [MCI]::mciSendString("stop rec",$null,0,0)|Out-Null
 [MCI]::mciSendString("save rec $O",$null,0,0)|Out-Null
 [MCI]::mciSendString("close rec",$null,0,0)|Out-Null
-if (!(Test-Path $O) -or (Get-Item $O).Length -eq 0) {Remove-Item $F -Force; exit 1}
-$T=(curl.exe -sS $API -H "Authorization: Bearer $env:GROQ_API_KEY" -F "file=@$O;type=audio/wav" -F model=whisper-large-v3-turbo | ConvertFrom-Json).text
+if (!(Test-Path $O) -or (Get-Item $O).Length -lt 3000) {Remove-Item $O,$F -Force -ErrorAction SilentlyContinue; exit 1}
+$M=$env:V2T_MODEL; if(-not $M){$M="whisper-large-v3-turbo"}; $L=$env:V2T_LANG; if(-not $L){$L="en"}
+$T=(curl.exe -sS $API -H "Authorization: Bearer $env:GROQ_API_KEY" -F "file=@$O;type=audio/wav" -F "model=$M" -F "language=$L" -F "temperature=0" | ConvertFrom-Json).text
 Remove-Item $O,$F -Force
 Set-Clipboard $T
 Start-Sleep -Milliseconds 150

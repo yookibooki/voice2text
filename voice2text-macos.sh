@@ -5,7 +5,8 @@ API="https://api.groq.com/openai/v1/audio/transcriptions"
 if pkill -2 -f "swift.*$O" 2>/dev/null; then
 while pgrep -f "swift.*$O" >/dev/null; do sleep 0.05; done
 [ -s "$O" ] || exit 1
-T=$(curl -sS "$API" -H "Authorization: Bearer $GROQ_API_KEY" -F "file=@$O;type=audio/wav" -F model=whisper-large-v3-turbo | python3 -c 'import json,sys;print(json.load(sys.stdin).get("text",""))')
+S=$(wc -c <"$O" | tr -d ' '); [ "$S" -lt 3000 ] && rm -f "$O" && exit 0
+T=$(curl -sS "$API" -H "Authorization: Bearer $GROQ_API_KEY" -F "file=@$O;type=audio/wav" -F model="${V2T_MODEL:-whisper-large-v3-turbo}" -F language="${V2T_LANG:-en}" -F temperature=0 | python3 -c 'import json,sys;print(json.load(sys.stdin).get("text",""))')
 rm -f "$O"
 [ "$T" ] || exit 0
 printf '%s' "$T" | pbcopy
