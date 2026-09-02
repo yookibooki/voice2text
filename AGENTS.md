@@ -37,6 +37,5 @@ Test paste: `printf test | xclip -selection clipboard; xclip -o`
 - Keep installers idempotent: `grep -q PATH || echo`, `D=$(cd $(dirname $0) && pwd)`, `read -r` + `sed "s/'/'\\\\''/g"` + `chmod 600`
 
 ## Git
-
-- Commits: `vX.Y.Z: short` + bullets; tags `v0.0.x` after verify
+- Commits: `vX.Y.Z: short` + bullets
 - Docs: `README.md` for end users (copy-paste install), `AGENTS.md` for agents (this file) — single source, no duplication
