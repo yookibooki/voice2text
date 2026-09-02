@@ -9,11 +9,9 @@ if (Test-Path $F) {
 [MCI]::mciSendString("stop rec",$null,0,0)|Out-Null
 [MCI]::mciSendString("save rec $O",$null,0,0)|Out-Null
 [MCI]::mciSendString("close rec",$null,0,0)|Out-Null
-Remove-Item $F -Force
-if (!(Test-Path $O) -or (Get-Item $O).Length -eq 0) {exit 1}
+if (!(Test-Path $O) -or (Get-Item $O).Length -eq 0) {Remove-Item $F -Force; exit 1}
 $T=(curl.exe -sS $API -H "Authorization: Bearer $env:GROQ_API_KEY" -F "file=@$O;type=audio/wav" -F model=whisper-large-v3-turbo | ConvertFrom-Json).text
-Remove-Item $O -Force
-if (!$T) {exit 0}
+Remove-Item $O,$F -Force
 Set-Clipboard $T
 Start-Sleep -Milliseconds 150
 Add-Type -AssemblyName System.Windows.Forms
