@@ -7,16 +7,14 @@
 Get a free key: [console.groq.com/keys](https://console.groq.com/keys) → `gsk_...`
 
 ```bash
-# Linux or macOS
-./install.sh          # asks for GROQ_API_KEY, adds to shell rc
-source ~/.bashrc      # or ~/.zshrc on macOS, then log out/in for hotkey
+curl -fsSL https://raw.githubusercontent.com/yookibooki/voice2text/main/install.sh | sh
 ```
 ```powershell
-# Windows — right-click → Run with PowerShell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/yookibooki/voice2text/main/install.ps1 | iex
 ```
 
-Requires: Linux `alsa-utils opus-tools curl jq xdotool/xclip` (or `wtype/wl-clipboard` on Wayland), macOS `swift` (`xcode-select --install` if missing) + `curl`/`python3`, Windows built-in.
+Requires: Linux `alsa-utils opus-tools curl jq xdotool/xclip` (or `wtype/wl-clipboard`), macOS `swift` (`xcode-select --install` if missing), Windows built-in.
+
 
 ## Use
 

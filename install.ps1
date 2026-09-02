@@ -1,6 +1,7 @@
 $B="$env:USERPROFILE\bin"
 mkdir $B -Force|Out-Null
-Copy-Item $PSScriptRoot\voice2text.ps1 $B\voice2text.ps1 -Force
+$S="$PSScriptRoot\voice2text.ps1"
+if (Test-Path $S) {Copy-Item $S $B\voice2text.ps1 -Force} else {Invoke-WebRequest "https://raw.githubusercontent.com/yookibooki/voice2text/main/voice2text.ps1" -OutFile "$B\voice2text.ps1"}
 $P=[Environment]::GetEnvironmentVariable("Path","User")
 if ($P -notlike "*$B*") {setx PATH "$P;$B"|Out-Null; $env:PATH="$P;$B"}
 if (!$env:GROQ_API_KEY) {$K=Read-Host "GROQ_API_KEY"; setx GROQ_API_KEY $K|Out-Null}
