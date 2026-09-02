@@ -1,32 +1,28 @@
 #!/bin/sh
-AUDIO=/tmp/voice2text.wav
-PIDFILE=/tmp/voice2text.pid
-API=https://api.groq.com/openai/v1
-STT_MODEL=whisper-large-v3-turbo
+umask 077
+O="/tmp/v2t.ogg"
 
-[ -n "$GROQ_API_KEY" ] || exit 1
+if pkill -2 -f "arecord -q -t raw" 2>/dev/null; then
+    while pgrep -f "opusenc.*$O" >/dev/null; do sleep 0.05; done
 
-if [ -f "$PIDFILE" ]; then
-    kill -TERM "$(cat "$PIDFILE")"
-    wait "$(cat "$PIDFILE")" 2>/dev/null
-    rm -f "$PIDFILE"
-else
-    rm -f "$PIDFILE"
-    arecord -q -f S16_LE -r 16000 -c 1 "$AUDIO" &
-    echo $! > "$PIDFILE"
+    [ -s "$O" ] || exit 1
+    T=$(curl -sS "https://api.groq.com/openai/v1/audio/transcriptions" \
+        -H "Authorization: Bearer $GROQ_API_KEY" \
+        -F "file=@$O;type=audio/ogg" \
+        -F model=whisper-large-v3-turbo | jq -r '.text // empty')
+    rm -f "$O"
+
+    [ "$T" ] || exit 0
+    if [ "$WAYLAND_DISPLAY" ]; then
+        printf '%s' "$T" | wl-copy
+        sleep 0.15
+        wtype -M ctrl -M shift v 2>/dev/null || wtype -M ctrl v 2>/dev/null
+    else
+        printf '%s' "$T" | xclip -selection clipboard
+        sleep 0.15
+        xdotool key --clearmodifiers ctrl+shift+v 2>/dev/null || xdotool key --clearmodifiers ctrl+v
+    fi
     exit 0
 fi
 
-[ -s "$AUDIO" ] || exit 1
-
-TEXT=$(curl -sS --max-time 300 "$API/audio/transcriptions" \
-        -H "Authorization: Bearer $GROQ_API_KEY" \
-        -F file=@"$AUDIO;type=audio/wav" \
-        -F model="$STT_MODEL" \
-        -F language=en \
-        | jq -r '.text // empty')
-
-rm -f "$AUDIO"
-[ -n "$TEXT" ] || exit 1
-
-xdotool type --clearmodifiers "$TEXT"
+arecord -q -t raw -f S16_LE -r 16000 -c 1 | opusenc --quiet --raw --raw-bits 16 --raw-rate 16000 --raw-chan 1 - "$O" &
