@@ -1,5 +1,6 @@
 #!/bin/sh
 umask 077
+read -r GROQ_API_KEY 2>/dev/null <"${XDG_CONFIG_HOME:-$HOME/.config}/voice2text/groq.key"
 [ "$GROQ_API_KEY" ] || exit 1
 
 DIR="${XDG_RUNTIME_DIR:-/tmp/v2t-$(id -u)}"
